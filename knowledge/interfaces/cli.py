@@ -520,12 +520,26 @@ def main() -> None:
     retriever, bm25, all_chunks, doc_count, chunk_count = build_retriever_from_documents(settings)
     answerer = RagAnswerer(settings)
 
-    # 在启动时构建全量知识图谱
-    print("\n正在构建知识图谱，这可能需要几分钟时间，请稍候...")
     graph_store = KnowledgeGraphStore()
-    # 使用LLM进行高质量的三元组抽取
-    graph_store.build_from_chunks(all_chunks, extractor, use_llm=True)
-    print(f"知识图谱构建完成，包含 {graph_store.graph.number_of_nodes()} 个节点和 {graph_store.graph.number_of_edges()} 条边。")
+    if settings.enable_graph_on_start:
+        from pathlib import Path
+        cache_path = settings.graph_cache_path
+        if cache_path and Path(cache_path).exists():
+            try:
+                graph_store.load_from(cache_path)
+                print(f"已从缓存加载知识图谱：nodes={graph_store.graph.number_of_nodes()} edges={graph_store.graph.number_of_edges()}")
+            except Exception:
+                pass
+        if graph_store.graph.number_of_nodes() == 0:
+            print("\n正在构建知识图谱，这可能需要几分钟时间，请稍候...")
+            chunks = all_chunks[:settings.graph_build_max_chunks] if settings.graph_build_max_chunks > 0 else all_chunks
+            graph_store.build_from_chunks(chunks, extractor, use_llm=True)
+            if cache_path:
+                try:
+                    graph_store.save_to(cache_path)
+                except Exception:
+                    pass
+            print(f"知识图谱构建完成，包含 {graph_store.graph.number_of_nodes()} 个节点和 {graph_store.graph.number_of_edges()} 条边。")
 
     print(
         f"AI Assistant CLI 已启动，直接回车可退出。文档数={doc_count}，文本块数={chunk_count}，"
@@ -565,12 +579,15 @@ def main() -> None:
         except Exception as e:
             print(f"\n[ERROR] 调用失败: {e}")
             continue
-        print(f"\n[NLU] intent={plan.intent}, question_type={plan.question_type}, entities={plan.entities}")
-        print(f"[Route] {route_mode}")
-        print(f"[LLM-REWRITE] used={used_llm_rewrite}")
-        print(f"[LLM-RERANK] used={llm_used}, reason={llm_reason}")
-        print("[Prompt]\n" + prompt)
-        print("\n[Answer]\n" + answer)
+        if settings.enable_debug_output:
+            print(f"\n[NLU] intent={plan.intent}, question_type={plan.question_type}, entities={plan.entities}")
+            print(f"[Route] {route_mode}")
+            print(f"[LLM-REWRITE] used={used_llm_rewrite}")
+            print(f"[LLM-RERANK] used={llm_used}, reason={llm_reason}")
+            print("[Prompt]\n" + prompt)
+            print("\n[Answer]\n" + answer)
+        else:
+            print(answer)
 
 
 if __name__ == "__main__":

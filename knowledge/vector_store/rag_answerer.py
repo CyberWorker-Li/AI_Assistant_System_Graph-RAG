@@ -21,6 +21,13 @@ class RagAnswerer:
 
         try:
             generated = self._llm_answer(question, top, intent)
+            if self.settings.enable_llm_polish and self.settings.polish_base_url and self.settings.polish_api_key:
+                try:
+                    generated = self._polish_text(generated)
+                except Exception:
+                    pass
+            if self.settings.concise_answer:
+                return generated
             lines.append("综合回答：" + generated)
         except Exception as e:
             lines.append(f"综合回答生成失败：{e}")
@@ -57,3 +64,19 @@ class RagAnswerer:
         if not content:
             raise RuntimeError("LLM返回为空")
         return content
+
+    def _polish_text(self, text: str) -> str:
+        from langchain_core.messages import HumanMessage, SystemMessage
+        from langchain_openai import ChatOpenAI
+        llm = ChatOpenAI(
+            model=self.settings.polish_model,
+            api_key=self.settings.polish_api_key or "no-key",
+            base_url=self.settings.polish_base_url,
+            timeout=self.settings.llm_timeout,
+            temperature=0.2,
+        )
+        result = llm.invoke([
+            SystemMessage(content="你是中文写作润色助手，在不改变事实并保留所有引用编号如[1][2]的前提下优化语言表达。只输出润色后的文本。"),
+            HumanMessage(content=text),
+        ])
+        return str(result.content).strip() or text

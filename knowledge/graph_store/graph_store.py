@@ -82,3 +82,15 @@ class KnowledgeGraphStore:
                                 continue
 
         return list(relevant_triples)
+
+    def save_to(self, path: str) -> None:
+        try:
+            nx.write_gpickle(self.graph, path)
+        except Exception:
+            pass
+
+    def load_from(self, path: str) -> None:
+        try:
+            self.graph = nx.read_gpickle(path)
+        except Exception:
+            self.graph = nx.DiGraph()
