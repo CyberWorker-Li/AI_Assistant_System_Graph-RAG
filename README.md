@@ -1,76 +1,165 @@
-# AI_Assistant_System_Graph-RAG
-《人工智能基础》课程AI助教
 ==========================================================================
-   AI Assistant: 基于 Graph-RAG 与 混合检索的本地课程助教系统
+   AI Assistant: 基于 Graph-RAG 与 混合检索的课程助教问答系统（本地优先）
 ==========================================================================
 
 1. 项目简介
 -----------
-本项目是一个针对课程文档（如 .docx）设计的智能问答助手。它集成了最前沿的 
-Graph-RAG（图增强检索）与 混合检索（向量 + 关键词）技术，旨在解决传统 RAG 
-在处理复杂推理、长上下文关联以及专有名词匹配时的局限性。
+本项目是一个针对课程文档（.docx/.pdf/.txt）构建的智能问答助手，核心目标是：
+- 证据可追溯：回答要求给出引用编号
+- 复杂问题可回答：Graph-RAG（图谱证据）+ 混合检索（向量 + 关键词）
+- 本地优先：默认使用本地 Ollama，本地 embedding/rerank；可选接入 DeepSeek 做润色与图谱清洗
 
 2. 技术路线 (Technical Stack)
 ----------------------------
-*   核心框架: LangChain (用于流程编排、文本切分、LLM 调用)
-*   本地语言模型 (LLM): Llama 3.1 (8B-Instruct-Q2_K) via Ollama
-*   文本向量化 (Embedding): BAAI/bge-m3 (本地加载，支持多语言、长文本)
-*   重排模型 (Reranker): BAAI/bge-reranker-base (本地加载，提升检索精度)
-*   知识图谱 (Graph): NetworkX (构建实体-关系网络)
-*   关键词检索: Rank-BM25 + Jieba (针对中文优化的混合检索)
-*   向量数据库: FAISS (轻量级本地向量索引)
+* 核心框架: LangChain（流程编排、文本切分、LLM 调用）
+* 本地语言模型(LLM): Llama 3.1 via Ollama（建议使用 llama3.1:8b，质量较 q2 更稳定）
+* 文本向量化(Embedding): BAAI/bge-m3（本地加载，多语言/长文本）
+* 重排模型(Reranker): BAAI/bge-reranker-base（本地 cross-encoder 精排）
+* 关键词检索: Rank-BM25 + Jieba
+* 向量索引: FAISS（本地）
+* 知识图谱:
+  - NetworkX（进程内图，用于兼容与可视化）
+  - Neo4j（可选后端，用于持久化与更快的子图查询）
 
-3. 运行逻辑与过程 (Core Workflow)
---------------------------------
-A. 启动预处理阶段 (Initialization):
-   1. 文档加载: 从 data 目录读取课程测试文档。
-   2. 智能切分: 使用 RecursiveCharacterTextSplitter 按语义边界切分块。
-   3. 向量构建: 调用本地 bge-m3 生成嵌入向量并构建 FAISS 索引。
-   4. 关键词构建: 使用 jieba 对全文分词并构建 BM25 索引。
-   5. 全量建图: 调用 LLM 遍历文本块，提取(实体-关系-实体)三元组，构建持久化知识图谱。
-
-B. 问答执行阶段 (Query Process):
-   1. 意图分析 (NLU): 识别问题中的意图、实体及复杂度（Simple/Multi-hop）。
-   2. 查询改写: LLM 将原始问题改写为更适合检索的多个候选查询。
-   3. 混合检索: 同时执行向量检索(语义)与 BM25 检索(关键词)。
-   4. 检索融合: 使用 RRF (倒数排序融合) 算法合并两路检索结果。
-   5. 图谱增强: 根据识别出的实体，在图谱中进行“模糊匹配”并提取相关子图路径。
-   6. 深度重排 (Rerank): 使用 CrossEncoder 模型对候选证据进行精细打分排序。
-   7. 证据压缩: 提取证据中最相关的片段，并自动扩展上下文（抓取前后相邻块）。
-   8. 生成回答: LLM 结合文本证据与图谱结构信息，生成可追溯、带引用的答案。
-
-4. 环境依赖 (Prerequisites)
+3. 支持的文档格式与数据目录
 --------------------------
-*   Python 3.10+
-*   已安装并启动 Ollama (https://ollama.com)
-*   核心依赖库安装:
-    pip install langchain langchain-openai langchain-text-splitters 
-    pip install sentence-transformers faiss-cpu rank-bm25 jieba networkx requests
+数据目录默认: AI_Assistant/data
+支持读取:
+- .docx
+- .pdf
+- .txt
+不支持直接读取:
+- .doc（旧 Word 格式），需先转换为 .docx
+备注:
+- Office 可能生成 ~$.docx 临时文件，建议从 data 目录移除/忽略
 
-5. 关键配置说明 (Configuration)
+4. 运行逻辑与过程 (Core Workflow)
+--------------------------------
+A. 启动阶段 (Initialization)
+1) 文档加载: 从 data 目录读取文档
+2) 智能切分: RecursiveCharacterTextSplitter（chunk_size/chunk_overlap 可配置）
+3) 向量构建: bge-m3 生成 embedding，构建 FAISS
+4) 关键词构建: jieba 分词，构建 BM25
+5) 知识图谱（可选）:
+   - enable_graph_on_start=true 时执行三元组抽取并建图
+   - 若启用 Neo4j，则将三元组写入 Neo4j（:Entity)-[:REL {label}]->(:Entity)
+   - 支持从本地 graph_store.pkl 加载/保存缓存（加速后续启动）
+
+B. 问答阶段 (Query Process)
+1) NLU: 识别意图/实体/复杂度（simple vs multi-hop）
+2) 查询改写（可选）: LLM rewrite 生成更适合检索的 query
+3) 混合检索: 向量检索 + BM25
+4) 融合: RRF 合并排序
+5) 图谱增强（可选）: 基于实体从图中提取邻居/路径作为“图证据”
+6) 精排（可选）: bge-reranker-base 精排候选证据
+7) 证据压缩与上下文扩展: 选取片段并抓取相邻块
+8) 生成回答: LLM 基于证据生成回答，并输出引用编号
+9) 润色（可选）: 通过 DeepSeek 对最终文本润色（保留引用编号）
+10) 小范围上下文记忆（可选）: 将最近几轮问答作为“理解指代”的辅助上下文（与证据冲突时以证据为准）
+
+5. 快速开始 (Windows)
+--------------------
+1) 安装依赖（示例）
+   pip install langchain langchain-openai langchain-text-splitters
+   pip install sentence-transformers faiss-cpu rank-bm25 jieba networkx requests neo4j
+2) 启动本地 Ollama，并拉取模型
+   ollama pull llama3.1:8b
+3) 将课程文档放入 AI_Assistant/data（.docx/.pdf/.txt）
+4) 启动
+   双击 AI_Assistant/run.bat
+
+6. run.bat 启动脚本说明
+----------------------
+run.bat 作用:
+- 自动定位 AI_Assistant 目录并设置 PYTHONPATH
+- 检查 Python 与 Ollama 服务是否可用
+- 通过环境变量注入所有运行时开关（LLM/检索/图谱/Neo4j/润色等）
+- 启动入口: python -m knowledge.interfaces.cli
+
+你常用会改的变量（都在 run.bat 的 set 行里）:
+- LLM（Ollama）:
+  AI_ASSISTANT_LLM_BASE_URL
+  AI_ASSISTANT_LLM_ANSWER_MODEL
+  AI_ASSISTANT_LLM_RERANK_MODEL
+- DeepSeek 润色:
+  AI_ASSISTANT_ENABLE_LLM_POLISH
+  AI_ASSISTANT_POLISH_BASE_URL
+  AI_ASSISTANT_POLISH_MODEL
+  AI_ASSISTANT_POLISH_API_KEY
+- Neo4j:
+  AI_ASSISTANT_ENABLE_NEO4J_GRAPH
+  AI_ASSISTANT_NEO4J_URI / AI_ASSISTANT_NEO4J_USER / AI_ASSISTANT_NEO4J_PASSWORD / AI_ASSISTANT_NEO4J_DATABASE
+  AI_ASSISTANT_NEO4J_CLEAR_ON_BUILD
+- 启动建图（建议日常关闭）:
+  AI_ASSISTANT_ENABLE_GRAPH_ON_START
+- 输出与会话:
+  AI_ASSISTANT_ENABLE_DEBUG_OUTPUT
+  AI_ASSISTANT_CONCISE_ANSWER
+  AI_ASSISTANT_ENABLE_SESSION_MEMORY / AI_ASSISTANT_SESSION_MAX_TURNS / AI_ASSISTANT_SESSION_MAX_CHARS
+
+安全提醒:
+- 不建议把 DeepSeek API Key 明文提交到仓库；如团队协作必须写入 run.bat，请使用可随时轮换的低权限 key。
+
+6. 关键配置说明 (Configuration)
 ------------------------------
-项目配置主要通过 `knowledge/shared/config.py` 及环境变量控制：
+配置来源:
+- 代码默认值: knowledge/shared/config.py
+- 运行时环境变量: run.bat 中 set 的变量
 
-*   LLM 接口:
-    - AI_ASSISTANT_LLM_BASE_URL: 默认为 http://localhost:11434/v1 (Ollama)
-    - AI_ASSISTANT_LLM_ANSWER_MODEL: 推荐使用 llama3.1:8b-instruct-q2_K
-*   本地模型路径 (必须在 cli.py/vector_retriever.py 中确认路径一致):
-    - Embedding 路径: models/bge-m3
-    - Reranker 路径: models/bge-reranker-base
-*   检索参数:
-    - chunk_size: 800 (建议范围 600-1000)
-    - chunk_overlap: 200 (保留足够的语义重叠)
-    - enable_rerank: True (启用深度重排以获得更高精度)
+常用参数:
+- 检索与切分:
+  AI_ASSISTANT_TOP_K（默认3）
+  AI_ASSISTANT_CHUNK_SIZE（默认800）
+  AI_ASSISTANT_CHUNK_OVERLAP（默认200）
+- LLM(Ollama):
+  AI_ASSISTANT_LLM_BASE_URL（默认 http://localhost:11434/v1）
+  AI_ASSISTANT_LLM_ANSWER_MODEL（建议 llama3.1:8b）
+  AI_ASSISTANT_ENABLE_LLM_REWRITE / AI_ASSISTANT_ENABLE_LLM_RERANK
+- DeepSeek 润色:
+  AI_ASSISTANT_ENABLE_LLM_POLISH
+  AI_ASSISTANT_POLISH_BASE_URL=https://api.deepseek.com/v1
+  AI_ASSISTANT_POLISH_MODEL=deepseek-chat
+  AI_ASSISTANT_POLISH_API_KEY
+- 启动建图/缓存:
+  AI_ASSISTANT_ENABLE_GRAPH_ON_START（建议日常为 false；仅在数据更新后手动打开一次）
+  AI_ASSISTANT_GRAPH_CACHE_PATH（默认 data/graph_store.pkl）
+  AI_ASSISTANT_GRAPH_BUILD_MAX_CHUNKS（限制建图块数，降低资源压力）
+- Neo4j:
+  AI_ASSISTANT_ENABLE_NEO4J_GRAPH
+  AI_ASSISTANT_NEO4J_URI（默认 bolt://localhost:7687）
+  AI_ASSISTANT_NEO4J_USER / AI_ASSISTANT_NEO4J_PASSWORD / AI_ASSISTANT_NEO4J_DATABASE
+  AI_ASSISTANT_NEO4J_CLEAR_ON_BUILD（重建时是否清库）
+- 小范围会话记忆:
+  AI_ASSISTANT_ENABLE_SESSION_MEMORY（默认 true）
+  AI_ASSISTANT_SESSION_MAX_TURNS（默认4）
+  AI_ASSISTANT_SESSION_MAX_CHARS（默认1200）
+- 输出模式:
+  AI_ASSISTANT_ENABLE_DEBUG_OUTPUT（调试输出）
+  AI_ASSISTANT_CONCISE_ANSWER（简洁输出，仅最终答案）
 
-6. 移植与部署建议
----------------
-1. 模型准备: 确保 models 目录下包含完整的 bge-m3 和 bge-reranker-base 文件。
-2. Ollama 准备: 执行 `ollama pull llama3.1:8b-instruct-q2_K`。
-3. 数据放置: 将你的课程文档（.docx）放入 AI_Assistant/data 目录下。
-4. 启动: 直接运行根目录下的 `run.bat`，它会自动配置 PYTHONPATH 并启动程序。
+7. Neo4j 使用说明
+----------------
+1) Neo4j Desktop 创建本地实例并启动（Bolt 通常为 7687）
+2) 在 run.bat 设置连接参数（uri/user/password/database）
+3) 仅在数据更新时启用建图导入:
+   set AI_ASSISTANT_ENABLE_GRAPH_ON_START=true
+4) 导入完成后建议改回 false，加速日常启动
+5) 验证（Neo4j Query 工具）
+   MATCH (n:Entity) RETURN count(n);
+   MATCH (:Entity)-[r:REL]->(:Entity) RETURN count(r);
 
-7. 故障排除
-----------
-*   若遇到 "JSON Decode Error": 本项目已集成鲁棒解析器，会自动尝试修复小模型畸形输出。
-*   若遇到 "ModuleNotFoundError": 请务必通过 `run.bat` 启动或手动设置 PYTHONPATH 为项目根目录。
-*   网络超时: 已配置为本地优先模式，除首次下载库外，运行过程无需外网连接。
+8. 图谱清洗（DeepSeek 复核脚本）
+------------------------------
+脚本位置: AI_Assistant/tools/deepseek_graph_audit.py
+用途:
+- 批量抽检/复核图谱关系，写回 deepseek_verdict/confidence/reason/suggested_label 等字段
+- 默认可严格限制 token 与预算（建议预算 50 RMB）
+说明:
+- 脚本是独立工具，不影响主问答流程；是否写回数据库由 --apply 控制
+
+9. 常见问题
+------------
+- jieba 报 pkg_resources deprecate 警告：不影响运行，可忽略。
+- .doc 无法读取：先转换为 .docx。
+- 启动很慢：可能在建图/抽三元组；日常将 AI_ASSISTANT_ENABLE_GRAPH_ON_START 设为 false。
+- Ollama 500 runner stopped：资源不足导致，降低建图块数或换更轻量模型进行抽取。
