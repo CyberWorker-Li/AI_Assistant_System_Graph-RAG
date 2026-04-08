@@ -519,10 +519,27 @@ def main() -> None:
     extractor = TripleExtractor()
     retriever, bm25, all_chunks, doc_count, chunk_count = build_retriever_from_documents(settings)
     answerer = RagAnswerer(settings)
+    session = None
+    if getattr(settings, "enable_session_memory", False):
+        try:
+            from knowledge.dialog.session_manager import SessionManager
 
-    graph_store = KnowledgeGraphStore()
+            session = SessionManager(max_turns=int(getattr(settings, "session_max_turns", 4) or 4))
+        except Exception:
+            session = None
+
+    graph_store = KnowledgeGraphStore(settings)
     if settings.enable_graph_on_start:
         from pathlib import Path
+        if graph_store.neo4j_ready():
+            try:
+                if getattr(settings, "neo4j_clear_on_build", False):
+                    graph_store.neo4j_clear()
+                if graph_store.neo4j_has_data():
+                    print("已连接Neo4j并检测到图数据，将直接使用数据库图谱。")
+            except Exception:
+                pass
+
         cache_path = settings.graph_cache_path
         if cache_path and Path(cache_path).exists():
             try:
@@ -530,7 +547,15 @@ def main() -> None:
                 print(f"已从缓存加载知识图谱：nodes={graph_store.graph.number_of_nodes()} edges={graph_store.graph.number_of_edges()}")
             except Exception:
                 pass
-        if graph_store.graph.number_of_nodes() == 0:
+
+        need_build = graph_store.graph.number_of_nodes() == 0
+        if graph_store.neo4j_ready():
+            try:
+                need_build = need_build and not graph_store.neo4j_has_data()
+            except Exception:
+                pass
+
+        if need_build:
             print("\n正在构建知识图谱，这可能需要几分钟时间，请稍候...")
             chunks = all_chunks[:settings.graph_build_max_chunks] if settings.graph_build_max_chunks > 0 else all_chunks
             graph_store.build_from_chunks(chunks, extractor, use_llm=True)
@@ -575,7 +600,10 @@ def main() -> None:
                 else:
                     evidences.extend(graph_evidences)
             prompt = build_prompt(question, evidences)
-            answer = answerer.answer(question, hits, intent=plan.intent)
+            ctx = session.context_text() if session is not None else ""
+            answer = answerer.answer(question, evidences, intent=plan.intent, conversation_context=ctx)
+            if session is not None:
+                session.add_turn(question, answer[: int(getattr(settings, "session_max_chars", 1200) or 1200)])
         except Exception as e:
             print(f"\n[ERROR] 调用失败: {e}")
             continue
