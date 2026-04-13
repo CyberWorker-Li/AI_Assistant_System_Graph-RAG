@@ -1,4 +1,7 @@
-AI Assistant: 基于 Graph-RAG 与 混合检索的课程助教问答系统（本地优先）
+==========================================================================
+   AI Assistant: 基于 Graph-RAG 与 混合检索的课程助教问答系统（本地优先）
+==========================================================================
+
 1. 项目简介
 -----------
 本项目是一个针对课程文档（.docx/.pdf/.txt）构建的智能问答助手，核心目标是：
@@ -71,7 +74,18 @@ run.bat 作用:
 - 自动定位 AI_Assistant 目录并设置 PYTHONPATH
 - 检查 Python 与 Ollama 服务是否可用
 - 通过环境变量注入所有运行时开关（LLM/检索/图谱/Neo4j/润色等）
-- 启动入口: python -m knowledge.interfaces.cli
+- 支持三种启动模式:
+  - CLI: python -m knowledge.interfaces.cli
+  - UI:  python -m streamlit run ui\app.py
+  - ALL: 同时启动 CLI + UI
+
+用法:
+- 双击 run.bat：交互选择 1=CLI / 2=UI / 3=ALL（默认 ALL）
+- 命令行参数：run.bat cli | run.bat ui | run.bat all
+
+UI 说明（Streamlit）:
+- 问答：聊天式对话（支持多轮追问），可按需展开证据/Prompt/调试信息
+- 专家审图：候选边列表 + 搜索（按节点/按关系）+ Approve/Reject/Accept Suggestion/Set Label
 
 你常用会改的变量（都在 run.bat 的 set 行里）:
 - LLM（Ollama）:
@@ -97,7 +111,7 @@ run.bat 作用:
 安全提醒:
 - 不建议把 DeepSeek API Key 明文提交到仓库；如团队协作必须写入 run.bat，请使用可随时轮换的低权限 key。
 
-6. 关键配置说明 (Configuration)
+7. 关键配置说明 (Configuration)
 ------------------------------
 配置来源:
 - 代码默认值: knowledge/shared/config.py
@@ -106,6 +120,8 @@ run.bat 作用:
 常用参数:
 - 检索与切分:
   AI_ASSISTANT_TOP_K（默认3）
+  AI_ASSISTANT_RETRIEVAL_CANDIDATE_K（默认8，融合/精排前的候选规模）
+  AI_ASSISTANT_DOC_TOP_N（默认2，跨文档的候选上限，用于压制单文档刷屏）
   AI_ASSISTANT_CHUNK_SIZE（默认800）
   AI_ASSISTANT_CHUNK_OVERLAP（默认200）
 - LLM(Ollama):
@@ -121,11 +137,16 @@ run.bat 作用:
   AI_ASSISTANT_ENABLE_GRAPH_ON_START（建议日常为 false；仅在数据更新后手动打开一次）
   AI_ASSISTANT_GRAPH_CACHE_PATH（默认 data/graph_store.pkl）
   AI_ASSISTANT_GRAPH_BUILD_MAX_CHUNKS（限制建图块数，降低资源压力）
+  AI_ASSISTANT_ENABLE_INDEX_CACHE（默认 true，缓存 chunks/BM25/向量索引以加速启动）
+  AI_ASSISTANT_CACHE_DIR（默认 data/.cache）
+  AI_ASSISTANT_CACHE_VERSION（默认 v1，变更缓存格式/策略时可 bump 以自动失效旧缓存）
 - Neo4j:
   AI_ASSISTANT_ENABLE_NEO4J_GRAPH
   AI_ASSISTANT_NEO4J_URI（默认 bolt://localhost:7687）
   AI_ASSISTANT_NEO4J_USER / AI_ASSISTANT_NEO4J_PASSWORD / AI_ASSISTANT_NEO4J_DATABASE
   AI_ASSISTANT_NEO4J_CLEAR_ON_BUILD（重建时是否清库）
+- 图输出（可选）:
+  AI_ASSISTANT_GRAPH_HTML（默认 knowledge_graph.html）
 - 小范围会话记忆:
   AI_ASSISTANT_ENABLE_SESSION_MEMORY（默认 true）
   AI_ASSISTANT_SESSION_MAX_TURNS（默认4）
@@ -134,7 +155,7 @@ run.bat 作用:
   AI_ASSISTANT_ENABLE_DEBUG_OUTPUT（调试输出）
   AI_ASSISTANT_CONCISE_ANSWER（简洁输出，仅最终答案）
 
-7. Neo4j 使用说明
+8. Neo4j 使用说明
 ----------------
 1) Neo4j Desktop 创建本地实例并启动（Bolt 通常为 7687）
 2) 在 run.bat 设置连接参数（uri/user/password/database）
@@ -145,16 +166,23 @@ run.bat 作用:
    MATCH (n:Entity) RETURN count(n);
    MATCH (:Entity)-[r:REL]->(:Entity) RETURN count(r);
 
-8. 图谱清洗（DeepSeek 复核脚本）
+9. 图谱清洗（DeepSeek 复核脚本）
 ------------------------------
 脚本位置: AI_Assistant/tools/deepseek_graph_audit.py
 用途:
 - 批量抽检/复核图谱关系，写回 deepseek_verdict/confidence/reason/suggested_label 等字段
-- 默认可严格限制 token 与预算（建议预算 50 RMB）
-说明:
-- 脚本是独立工具，不影响主问答流程；是否写回数据库由 --apply 控制
+- 支持对明显噪声做规则过滤；对“关系名不贴切”给出 suggested_label，供专家一键采纳
 
-9. 常见问题
+成本与安全阀（重要）:
+- 默认 dry-run：不写库；只有加 --apply 才会写回 Neo4j
+- 可设置预算与 token 上限：--budget-rmb / --max-total-tokens / --max-output-tokens
+- 可控制抽检规模：--max-edges / --batch-size / --max-requests
+- 可选择“只标注不拒绝”：把 auto-reject-threshold 设得很高，避免脚本自动把边置为 rejected
+
+说明:
+- 脚本是独立工具，不影响主问答流程；即使脚本异常退出，也不会影响 CLI/UI 的问答。
+
+10. 常见问题
 ------------
 - jieba 报 pkg_resources deprecate 警告：不影响运行，可忽略。
 - .doc 无法读取：先转换为 .docx。
