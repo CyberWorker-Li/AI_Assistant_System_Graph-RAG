@@ -1,0 +1,47 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    environment:
+      AI_ASSISTANT_DATA_DIR: "data"
+
+      AI_ASSISTANT_EMBEDDING_MODEL: "/app/models/bge-m3"
+      AI_ASSISTANT_RERANKER_MODEL: "/app/models/bge-reranker-base"
+      AI_ASSISTANT_LOCAL_FILES_ONLY: "true"
+
+      AI_ASSISTANT_LLM_BASE_URL: "http://host.docker.internal:11434/v1"
+      AI_ASSISTANT_LLM_API_KEY: "no-key"
+      AI_ASSISTANT_LLM_ANSWER_MODEL: "llama3.1:8b"
+      AI_ASSISTANT_LLM_RERANK_MODEL: "llama3.1:8b"
+
+      AI_ASSISTANT_ENABLE_NEO4J_GRAPH: "true"
+      AI_ASSISTANT_NEO4J_URI: "bolt://neo4j:7687"
+      AI_ASSISTANT_NEO4J_USER: "neo4j"
+      AI_ASSISTANT_NEO4J_PASSWORD: "${AI_ASSISTANT_NEO4J_PASSWORD:-123456789}"
+      AI_ASSISTANT_NEO4J_DATABASE: "neo4j"
+      AI_ASSISTANT_NEO4J_CLEAR_ON_BUILD: "false"
+
+      AI_ASSISTANT_ENABLE_LLM_POLISH: "false"
+      AI_ASSISTANT_POLISH_BASE_URL: "https://api.deepseek.com/v1"
+      AI_ASSISTANT_POLISH_MODEL: "deepseek-chat"
+      AI_ASSISTANT_POLISH_API_KEY: "${AI_ASSISTANT_POLISH_API_KEY:-}"
+
+    depends_on:
+      - neo4j
+
+  neo4j:
+    image: neo4j:5
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: "neo4j/${AI_ASSISTANT_NEO4J_PASSWORD:-123456789}"
+    volumes:
+      - neo4j_data:/data
+
+volumes:
+  neo4j_data: {}
