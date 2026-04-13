@@ -1,5 +1,4 @@
 AI Assistant: 基于 Graph-RAG 与 混合检索的课程助教问答系统（本地优先）
-
 1. 项目简介
 -----------
 本项目是一个针对课程文档（.docx/.pdf/.txt）构建的智能问答助手，核心目标是：
@@ -186,3 +185,39 @@ UI 说明（Streamlit）:
 - .doc 无法读取：先转换为 .docx。
 - 启动很慢：可能在建图/抽三元组；日常将 AI_ASSISTANT_ENABLE_GRAPH_ON_START 设为 false。
 - Ollama 500 runner stopped：资源不足导致，降低建图块数或换更轻量模型进行抽取。
+- Docker build 过程中出现 failed to receive status / EOF：常见于 Docker Desktop 引擎崩溃或网络抖动，建议重启 Docker Desktop、执行 wsl --shutdown 后重试。
+
+11. Docker 化运行（可选）
+----------------------
+适用场景:
+- 需要在团队中统一运行环境，减少“我电脑能跑你电脑不行”的问题。
+
+关键文件:
+- Dockerfile
+- docker-compose.yml
+- .dockerignore（强烈建议，避免把 data/models 整体 COPY 到镜像）
+
+构建与启动:
+- 在 AI_Assistant 目录执行:
+  docker compose build app --no-cache
+  docker compose up
+- UI 访问:
+  http://localhost:8501
+
+说明:
+- 本项目也支持本地直接运行（run.bat）；Docker 不是必选项。
+- 如遇 Docker Hub 鉴权超时，可先手动拉取基础镜像再构建。
+
+12. GitHub 提交建议（Docker 相关）
+-----------------------------
+建议提交:
+- Dockerfile / docker-compose.yml / .dockerignore
+- README 中 Docker 使用说明
+
+禁止提交:
+- 明文密钥（DeepSeek API Key、Neo4j 生产密码等）
+- 本地大文件与运行缓存（data/、models/、.cache/、图缓存）
+
+推荐做法:
+- 在 docker-compose.yml 使用环境变量占位（${VAR}），不写死敏感值。
+- 团队协作时，把“模板配置”入库，把“个人密钥”放本地环境变量。
