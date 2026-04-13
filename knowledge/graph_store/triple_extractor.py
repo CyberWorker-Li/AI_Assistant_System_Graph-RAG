@@ -22,7 +22,7 @@ class TripleExtractor:
     def extract(self, text: str, use_llm: bool = True) -> List[Tuple[str, str, str]]:
         if use_llm:
             if not self.config.api_key and "localhost" not in self.config.api_url:
-                # 对于本地模型，我们假设不需要key
+                # 对于本地模型，我们不需要key
                 pass
             try:
                 triples = self._extract_by_llm(text)
@@ -78,9 +78,9 @@ class TripleExtractor:
 
         # 尝试从LLM的输出中解析JSON
         try:
-            # 预处理：修复小模型常见的畸形结构，如 {"triples": [[...]], [...]]}
+            # 预处理：修复小模型常见的畸形结构
             fixed_content = content.replace(']], [[', '], [').replace('], [', '],###,[').replace('], [', '],') 
-            # 这里的思路是先保护正确的逗号，再清理掉多余的括号
+            # 先保护正确的逗号，再清理掉多余的括号
             
             match = re.search(r"\{[\s\S]*\}", content)
             if match:

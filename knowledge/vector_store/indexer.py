@@ -28,6 +28,36 @@ class SimpleVectorIndexer:
         self._emb_matrix = None
         self._init_semantic_backend_or_raise()
 
+    def load_faiss_index(self, file_path: str) -> None:
+        if self._faiss is None:
+            raise RuntimeError("FAISS不可用，无法加载索引")
+        p = Path(file_path)
+        if not p.exists():
+            raise RuntimeError(f"索引文件不存在: {file_path}")
+        self._faiss_index = self._faiss.read_index(str(p))
+
+    def save_faiss_index(self, file_path: str) -> None:
+        if self._faiss is None or self._faiss_index is None:
+            return
+        p = Path(file_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        self._faiss.write_index(self._faiss_index, str(p))
+
+    def load_emb_matrix(self, file_path: str) -> None:
+        if np is None:
+            raise RuntimeError("缺少numpy，无法加载向量矩阵")
+        p = Path(file_path)
+        if not p.exists():
+            raise RuntimeError(f"向量矩阵文件不存在: {file_path}")
+        self._emb_matrix = np.load(str(p))
+
+    def save_emb_matrix(self, file_path: str) -> None:
+        if np is None or self._emb_matrix is None:
+            return
+        p = Path(file_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        np.save(str(p), self._emb_matrix)
+
     @property
     def backend_status(self) -> Dict[str, str]:
         return {
