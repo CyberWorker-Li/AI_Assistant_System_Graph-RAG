@@ -1,5 +1,8 @@
 import json
 import re
+import pickle
+import hashlib
+from pathlib import Path
 
 from ingestion.document_loader import load_course_documents
 from knowledge.shared.config import Settings
@@ -17,57 +20,126 @@ import jieba
 from knowledge.graph_store.graph_store import KnowledgeGraphStore
 
 
+def _calc_cache_key(settings: Settings, local_model_path: str) -> str:
+    base = Path(settings.data_dir)
+    files = []
+    for p in sorted(base.rglob("*")):
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in {".docx", ".pdf", ".txt"}:
+            continue
+        try:
+            st = p.stat()
+            files.append({"p": str(p), "s": int(st.st_size), "m": int(st.st_mtime)})
+        except Exception:
+            continue
+
+    payload = {
+        "cache_version": getattr(settings, "cache_version", "v1"),
+        "data_dir": str(base),
+        "files": files,
+        "chunk_size": int(settings.chunk_size),
+        "chunk_overlap": int(settings.chunk_overlap),
+        "embedding_model": str(local_model_path),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
 def build_retriever_from_documents(settings: Settings) -> tuple[VectorRetriever, BM25Okapi, list[ChunkRecord], int, int]:
-    # 直接指定用户提供的本地模型路径，避免网络问题
     local_model_path = "D:\\mine\\bjtu\\AI_Assistant_Model\\graph_maker_LLM\\AI_Assistant\\models\\bge-m3"
     indexer = SimpleVectorIndexer(
         embedding_model_name=local_model_path,
-        local_files_only=True,  # 强制只使用本地文件
-    )
-    docs = load_course_documents(settings.data_dir)
-
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=settings.chunk_size,
-        chunk_overlap=settings.chunk_overlap,
-        separators=["\n\n", "\n", "。", "！", "？", "，", "、", " "],  # 优先按段落和句子切分
+        local_files_only=True,
     )
 
+    cache_dir = Path(getattr(settings, "cache_dir", "")) if getattr(settings, "enable_index_cache", False) else None
+    cache_key = _calc_cache_key(settings, local_model_path) if cache_dir is not None else ""
+    chunks_path = cache_dir / f"chunks_{cache_key}.pkl" if cache_dir is not None else None
+    bm25_path = cache_dir / f"bm25_{cache_key}.pkl" if cache_dir is not None else None
+    faiss_path = cache_dir / f"vector_{cache_key}.faiss" if cache_dir is not None else None
+    emb_path = cache_dir / f"vector_{cache_key}.npy" if cache_dir is not None else None
+
+    if cache_dir is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+    docs = []
     chunk_records: list[ChunkRecord] = []
-    chunk_id = 1
-    for d in docs:
-        parts = text_splitter.split_text(d.text)
-        for part in parts:
-            chunk_records.append(
-                ChunkRecord(
-                    chunk_id=f"doc-{chunk_id}",
-                    text=part,
-                    metadata={"source": d.source_file, "type": d.source_type},
+    bm25 = None
+
+    if cache_dir is not None and chunks_path is not None and chunks_path.exists() and bm25_path is not None and bm25_path.exists():
+        try:
+            chunk_records = pickle.loads(chunks_path.read_bytes())
+            bm25 = pickle.loads(bm25_path.read_bytes())
+            if faiss_path is not None and faiss_path.exists():
+                indexer.records = list(chunk_records)
+                indexer.load_faiss_index(str(faiss_path))
+            elif emb_path is not None and emb_path.exists():
+                indexer.records = list(chunk_records)
+                indexer.load_emb_matrix(str(emb_path))
+        except Exception:
+            chunk_records = []
+            bm25 = None
+
+    if not chunk_records or bm25 is None:
+        docs = load_course_documents(settings.data_dir)
+
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
+            separators=["\n\n", "\n", "。", "！", "？", "，", "、", " "],
+        )
+
+        chunk_id = 1
+        for d in docs:
+            parts = text_splitter.split_text(d.text)
+            for part in parts:
+                chunk_records.append(
+                    ChunkRecord(
+                        chunk_id=f"doc-{chunk_id}",
+                        text=part,
+                        metadata={"source": d.source_file, "type": d.source_type},
+                    )
                 )
-            )
-            chunk_id += 1
+                chunk_id += 1
 
-    if not docs:
-        raise RuntimeError(f"未在数据目录发现可用课程文档: {settings.data_dir}")
-    if not chunk_records:
-        raise RuntimeError(f"课程文档未提取到有效文本块: {settings.data_dir}")
+        if not docs:
+            raise RuntimeError(f"未在数据目录发现可用课程文档: {settings.data_dir}")
+        if not chunk_records:
+            raise RuntimeError(f"课程文档未提取到有效文本块: {settings.data_dir}")
 
-    # 1. 构建向量索引
-    indexer.add_chunks(chunk_records)
+        indexer.add_chunks(chunk_records)
+
+        print("正在构建BM25索引...")
+        corpus = [rec.text for rec in chunk_records]
+        tokenized_corpus = [list(jieba.cut_for_search(doc)) for doc in corpus]
+        bm25 = BM25Okapi(tokenized_corpus)
+        print("BM25索引构建完成。")
+
+        if cache_dir is not None and chunks_path is not None and bm25_path is not None:
+            try:
+                chunks_path.write_bytes(pickle.dumps(chunk_records))
+                bm25_path.write_bytes(pickle.dumps(bm25))
+                if indexer._faiss_index is not None and faiss_path is not None:
+                    indexer.save_faiss_index(str(faiss_path))
+                elif indexer._emb_matrix is not None and emb_path is not None:
+                    indexer.save_emb_matrix(str(emb_path))
+            except Exception:
+                pass
+
     retriever = VectorRetriever(
         indexer,
         reranker_model_name=settings.reranker_model,
-        enable_rerank=settings.enable_rerank, # 根据配置启用Reranker
+        enable_rerank=settings.enable_rerank,
         local_files_only=settings.local_files_only,
     )
 
-    # 2. 构建BM25关键词索引
-    print("正在构建BM25索引...")
-    corpus = [rec.text for rec in chunk_records]
-    tokenized_corpus = [list(jieba.cut_for_search(doc)) for doc in corpus]
-    bm25 = BM25Okapi(tokenized_corpus)
-    print("BM25索引构建完成。")
+    if not docs:
+        doc_count = len({Path(r.metadata.get("source", "")).name for r in chunk_records if r.metadata.get("source")})
+    else:
+        doc_count = len(docs)
 
-    return retriever, bm25, chunk_records, len(docs), len(chunk_records)
+    return retriever, bm25, chunk_records, doc_count, len(chunk_records)
 
 
 def _tokenize_query(question: str) -> set[str]:

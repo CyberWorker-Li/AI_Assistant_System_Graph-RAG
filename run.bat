@@ -65,10 +65,37 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 :: 6. 启动程序
-echo [*] 正在初始化索引并启动 AI Assistant...
+set MODE=%1
+if /I "%MODE%"=="all" goto RUN_ALL
+if /I "%MODE%"=="ui" goto RUN_UI
+if /I "%MODE%"=="cli" goto RUN_CLI
+
+echo [*] 请选择启动模式 (5秒后默认 ALL):
+choice /C 123 /N /T 5 /D 3 /M "1=CLI  2=UI  3=ALL : "
+if errorlevel 3 goto RUN_ALL
+if errorlevel 2 goto RUN_UI
+goto RUN_CLI
+
+:RUN_ALL
+echo [*] 正在同时启动 CLI + UI...
+echo ------------------------------------------------------
+start "AI Assistant UI" cmd /k "cd /d %PROJECT_ROOT% && python -m streamlit run ui\app.py"
+start "AI Assistant CLI" cmd /k "cd /d %PROJECT_ROOT% && python -m knowledge.interfaces.cli"
+goto RUN_END
+
+:RUN_UI
+echo [*] 正在启动 Web UI...
+echo ------------------------------------------------------
+python -m streamlit run ui\app.py
+goto RUN_END
+
+:RUN_CLI
+echo [*] 正在启动 CLI...
 echo ------------------------------------------------------
 python -m knowledge.interfaces.cli
+goto RUN_END
 
+:RUN_END
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo [提示] 程序异常退出，请检查上方报错信息。
